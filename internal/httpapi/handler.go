@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -19,6 +20,11 @@ type Handler struct {
 	store   *store.MemoryStore
 	checker *checker.HTTPChecker
 	nextID  atomic.Uint64
+}
+
+type indexedResult struct {
+	index  int
+	result model.CheckResult
 }
 
 func NewHandler(store *store.MemoryStore, checker *checker.HTTPChecker) *Handler {
@@ -118,11 +124,7 @@ func (h *Handler) createCheck(w http.ResponseWriter, r *http.Request) {
 	job.Status = model.StatusRunning
 	h.store.Update(job)
 
-	results := make([]model.CheckResult, 0, len(job.URLs))
-	for _, rawURL := range job.URLs {
-		result := h.checker.Check(r.Context(), rawURL)
-		results = append(results, result)
-	}
+	results := h.runChecksConcurrently(r, job.URLs)
 
 	job.Results = results
 	job.Summary = summarizeResults(results)
@@ -132,6 +134,41 @@ func (h *Handler) createCheck(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Location", "/checks/"+job.ID)
 	writeJSON(w, http.StatusCreated, job)
+}
+
+func (h *Handler) runChecksConcurrently(r *http.Request, urls []string) []model.CheckResult {
+	results := make([]model.CheckResult, len(urls))
+	resultsCh := make(chan indexedResult, len(urls))
+
+	var wg sync.WaitGroup
+	wg.Add(len(urls))
+
+	for i, rawURL := range urls {
+		i := i
+		rawURL := rawURL
+
+		go func() {
+			defer wg.Done()
+
+			result := h.checker.Check(r.Context(), rawURL)
+
+			resultsCh <- indexedResult{
+				index:  i,
+				result: result,
+			}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(resultsCh)
+	}()
+
+	for item := range resultsCh {
+		results[item.index] = item.result
+	}
+
+	return results
 }
 
 func summarizeResults(results []model.CheckResult) model.Summary {
