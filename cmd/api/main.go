@@ -10,12 +10,17 @@ import (
 )
 
 func main() {
+	// Create the in-memory job store.
 	st := store.NewMemoryStore()
+
+	// Create the HTTP handler layer with access to the store.
 	h := httpapi.NewHandler(st)
 
+	// Set up the standard library router and register API routes.
 	mux := http.NewServeMux()
 	h.Register(mux)
 
+	// Configure the HTTP server.
 	server := &http.Server{
 		Addr:              ":8080",
 		Handler:           mux,
