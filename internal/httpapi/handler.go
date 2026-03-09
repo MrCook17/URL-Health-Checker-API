@@ -9,32 +9,31 @@ import (
 	"sync/atomic"
 	"time"
 
+	"healthcheck-api/internal/checker"
 	"healthcheck-api/internal/model"
 	"healthcheck-api/internal/store"
 	"healthcheck-api/internal/validation"
 )
 
-// Handler contains API dependencies and shared request state.
 type Handler struct {
-	store  *store.MemoryStore
-	nextID atomic.Uint64
+	store   *store.MemoryStore
+	checker *checker.HTTPChecker
+	nextID  atomic.Uint64
 }
 
-// NewHandler creates a new HTTP API handler.
-func NewHandler(store *store.MemoryStore) *Handler {
+func NewHandler(store *store.MemoryStore, checker *checker.HTTPChecker) *Handler {
 	return &Handler{
-		store: store,
+		store:   store,
+		checker: checker,
 	}
 }
 
-// Register attaches API routes to the provided mux.
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/health", h.handleHealth)
 	mux.HandleFunc("/checks", h.handleChecks)
 	mux.HandleFunc("/checks/", h.handleCheckByID)
 }
 
-// handleHealth provides a simple liveness check.
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
@@ -46,7 +45,6 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleChecks dispatches requests for the /checks endpoint.
 func (h *Handler) handleChecks(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
@@ -56,7 +54,6 @@ func (h *Handler) handleChecks(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleCheckByID returns one stored check job by ID.
 func (h *Handler) handleCheckByID(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
@@ -78,7 +75,6 @@ func (h *Handler) handleCheckByID(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job)
 }
 
-// createCheck parses, validates, stores, and returns a new check job.
 func (h *Handler) createCheck(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
@@ -91,13 +87,11 @@ func (h *Handler) createCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reject trailing JSON or extra data after the first object.
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		writeError(w, http.StatusBadRequest, "invalid_request", "request body must contain a single JSON object")
 		return
 	}
 
-	// Validate input and apply defaults such as timeout.
 	if err := validation.NormalizeCheckRequest(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
@@ -121,12 +115,41 @@ func (h *Handler) createCheck(w http.ResponseWriter, r *http.Request) {
 
 	h.store.Create(job)
 
-	// Tell the client where the newly created job can be fetched.
+	job.Status = model.StatusRunning
+	h.store.Update(job)
+
+	results := make([]model.CheckResult, 0, len(job.URLs))
+	for _, rawURL := range job.URLs {
+		result := h.checker.Check(r.Context(), rawURL)
+		results = append(results, result)
+	}
+
+	job.Results = results
+	job.Summary = summarizeResults(results)
+	job.Status = model.StatusCompleted
+
+	h.store.Update(job)
+
 	w.Header().Set("Location", "/checks/"+job.ID)
 	writeJSON(w, http.StatusCreated, job)
 }
 
-// writeJSON sends a JSON response with the given status code.
+func summarizeResults(results []model.CheckResult) model.Summary {
+	summary := model.Summary{
+		Total: len(results),
+	}
+
+	for _, result := range results {
+		if result.Success {
+			summary.Successes++
+		} else {
+			summary.Failures++
+		}
+	}
+
+	return summary
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -136,7 +159,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	}
 }
 
-// writeError sends a consistent JSON error response.
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, model.ErrorResponse{
 		Error:   code,

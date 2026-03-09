@@ -28,6 +28,13 @@ func (s *MemoryStore) Create(job model.CheckJob) {
 	s.jobs[job.ID] = job
 }
 
+func (s *MemoryStore) Update(job model.CheckJob) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.jobs[job.ID] = job
+}
+
 // Get returns a job by ID and whether it exists.
 func (s *MemoryStore) Get(id string) (model.CheckJob, bool) {
 	s.mu.RLock()
