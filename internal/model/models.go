@@ -2,13 +2,27 @@ package model
 
 import "time"
 
-// CheckRequest is the request body for POST /checks.
+// Job lifecycle states.
+const (
+	StatusPending   = "pending"
+	StatusRunning   = "running"
+	StatusCompleted = "completed"
+	StatusFailed    = "failed"
+
+	// Validation and default request limits.
+	DefaultTimeoutMS = 3000
+	MinTimeoutMS     = 500
+	MaxTimeoutMS     = 10000
+	MaxURLsPerJob    = 20
+)
+
+// CheckRequest is the JSON body for POST /checks.
 type CheckRequest struct {
 	URLs      []string `json:"urls"`
 	TimeoutMS int      `json:"timeout_ms,omitempty"`
 }
 
-// CheckResult stores the outcome of checking a single URL.
+// CheckResult stores the outcome of checking one URL.
 type CheckResult struct {
 	URL            string    `json:"url"`
 	Success        bool      `json:"success"`
@@ -18,7 +32,7 @@ type CheckResult struct {
 	Error          string    `json:"error,omitempty"`
 }
 
-// Summary provides aggregate job statistics.
+// Summary provides aggregate counts for a check job.
 type Summary struct {
 	Total     int `json:"total"`
 	Successes int `json:"successes"`
@@ -36,7 +50,7 @@ type CheckJob struct {
 	Summary   Summary       `json:"summary"`
 }
 
-// ErrorResponse is a standard JSON error payload.
+// ErrorResponse is the standard JSON error payload.
 type ErrorResponse struct {
 	Error   string `json:"error"`
 	Message string `json:"message"`
