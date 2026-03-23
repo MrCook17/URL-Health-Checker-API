@@ -13,18 +13,17 @@ import (
 
 	"healthcheck-api/internal/checker"
 	"healthcheck-api/internal/model"
+	"healthcheck-api/internal/stats"
 	"healthcheck-api/internal/store"
 	"healthcheck-api/internal/validation"
 )
 
-// Handler contains the dependencies used by the HTTP API layer.
 type Handler struct {
 	store   *store.MemoryStore
 	checker *checker.HTTPChecker
 	nextID  atomic.Uint64
 }
 
-// indexedResult lets workers return results while preserving input order.
 type indexedResult struct {
 	index  int
 	result model.CheckResult
@@ -41,6 +40,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/health", h.handleHealth)
 	mux.HandleFunc("/checks", h.handleChecks)
 	mux.HandleFunc("/checks/", h.handleCheckByID)
+	mux.HandleFunc("/stats", h.handleStats)
 }
 
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -54,7 +54,6 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleChecks dispatches collection-level operations for /checks.
 func (h *Handler) handleChecks(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -87,10 +86,20 @@ func (h *Handler) handleCheckByID(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job)
 }
 
-// listChecks returns all stored jobs.
 func (h *Handler) listChecks(w http.ResponseWriter, r *http.Request) {
 	jobs := h.store.List()
 	writeJSON(w, http.StatusOK, jobs)
+}
+
+func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		return
+	}
+
+	jobs := h.store.List()
+	response := stats.ComputeSystemStats(jobs)
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *Handler) createCheck(w http.ResponseWriter, r *http.Request) {
@@ -105,13 +114,11 @@ func (h *Handler) createCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reject trailing data after the first JSON object.
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		writeError(w, http.StatusBadRequest, "invalid_request", "request body must contain a single JSON object")
 		return
 	}
 
-	// Validate input and apply defaults such as timeout_ms.
 	if err := validation.NormalizeCheckRequest(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
@@ -126,11 +133,7 @@ func (h *Handler) createCheck(w http.ResponseWriter, r *http.Request) {
 		URLs:      req.URLs,
 		TimeoutMS: req.TimeoutMS,
 		Results:   []model.CheckResult{},
-		Summary: model.Summary{
-			Total:     len(req.URLs),
-			Successes: 0,
-			Failures:  0,
-		},
+		Summary:   stats.ComputeJobSummary(nil),
 	}
 
 	h.store.Create(job)
@@ -138,14 +141,11 @@ func (h *Handler) createCheck(w http.ResponseWriter, r *http.Request) {
 	job.Status = model.StatusRunning
 	h.store.Update(job)
 
-	// Run all URL checks concurrently, with one timeout-controlled context per URL.
 	results := h.runChecksConcurrently(r.Context(), job.URLs, job.TimeoutMS)
 
 	job.Results = results
-	job.Summary = summarizeResults(results)
+	job.Summary = stats.ComputeJobSummary(results)
 
-	// If the parent request was canceled, mark the job as failed.
-	// Otherwise the job completed normally, even if some individual checks failed.
 	if err := r.Context().Err(); err != nil {
 		job.Status = model.StatusFailed
 	} else {
@@ -154,7 +154,6 @@ func (h *Handler) createCheck(w http.ResponseWriter, r *http.Request) {
 
 	h.store.Update(job)
 
-	// Do not try to write a response after the client has gone away.
 	if err := r.Context().Err(); err != nil {
 		return
 	}
@@ -163,8 +162,6 @@ func (h *Handler) createCheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, job)
 }
 
-// runChecksConcurrently launches one goroutine per URL.
-// Each check gets its own timeout, while parent request cancellation still propagates.
 func (h *Handler) runChecksConcurrently(parentCtx context.Context, urls []string, timeoutMS int) []model.CheckResult {
 	results := make([]model.CheckResult, len(urls))
 	resultsCh := make(chan indexedResult, len(urls))
@@ -175,7 +172,6 @@ func (h *Handler) runChecksConcurrently(parentCtx context.Context, urls []string
 	timeout := time.Duration(timeoutMS) * time.Millisecond
 
 	for i, rawURL := range urls {
-		// Capture loop variables for safe goroutine use.
 		i := i
 		rawURL := rawURL
 
@@ -204,23 +200,6 @@ func (h *Handler) runChecksConcurrently(parentCtx context.Context, urls []string
 	}
 
 	return results
-}
-
-// summarizeResults computes aggregate counts from per-URL results.
-func summarizeResults(results []model.CheckResult) model.Summary {
-	summary := model.Summary{
-		Total: len(results),
-	}
-
-	for _, result := range results {
-		if result.Success {
-			summary.Successes++
-		} else {
-			summary.Failures++
-		}
-	}
-
-	return summary
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

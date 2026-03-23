@@ -2,27 +2,23 @@ package model
 
 import "time"
 
-// Job lifecycle states.
 const (
 	StatusPending   = "pending"
 	StatusRunning   = "running"
 	StatusCompleted = "completed"
 	StatusFailed    = "failed"
 
-	// Validation and default request limits.
 	DefaultTimeoutMS = 3000
 	MinTimeoutMS     = 500
 	MaxTimeoutMS     = 10000
 	MaxURLsPerJob    = 20
 )
 
-// CheckRequest is the JSON body for POST /checks.
 type CheckRequest struct {
 	URLs      []string `json:"urls"`
 	TimeoutMS int      `json:"timeout_ms,omitempty"`
 }
 
-// CheckResult stores the outcome of checking one URL.
 type CheckResult struct {
 	URL            string    `json:"url"`
 	Success        bool      `json:"success"`
@@ -32,14 +28,19 @@ type CheckResult struct {
 	Error          string    `json:"error,omitempty"`
 }
 
-// Summary provides aggregate counts for a check job.
 type Summary struct {
-	Total     int `json:"total"`
-	Successes int `json:"successes"`
-	Failures  int `json:"failures"`
+	Total             int            `json:"total"`
+	Successes         int            `json:"successes"`
+	Failures          int            `json:"failures"`
+	AverageLatencyMS  float64        `json:"average_latency_ms"`
+	FastestURL        string         `json:"fastest_url,omitempty"`
+	FastestResponseMS int64          `json:"fastest_response_ms,omitempty"`
+	SlowestURL        string         `json:"slowest_url,omitempty"`
+	SlowestResponseMS int64          `json:"slowest_response_ms,omitempty"`
+	TimeoutCount      int            `json:"timeout_count"`
+	StatusClasses     map[string]int `json:"status_classes"`
 }
 
-// CheckJob represents one submitted health-check job.
 type CheckJob struct {
 	ID        string        `json:"id"`
 	CreatedAt time.Time     `json:"created_at"`
@@ -50,7 +51,25 @@ type CheckJob struct {
 	Summary   Summary       `json:"summary"`
 }
 
-// ErrorResponse is the standard JSON error payload.
+type StatsResponse struct {
+	TotalJobs          int            `json:"total_jobs"`
+	PendingJobs        int            `json:"pending_jobs"`
+	RunningJobs        int            `json:"running_jobs"`
+	CompletedJobs      int            `json:"completed_jobs"`
+	FailedJobs         int            `json:"failed_jobs"`
+	TotalURLsChecked   int            `json:"total_urls_checked"`
+	SuccessfulChecks   int            `json:"successful_checks"`
+	FailedChecks       int            `json:"failed_checks"`
+	AverageLatencyMS   float64        `json:"average_latency_ms"`
+	SuccessRatePercent float64        `json:"success_rate_percent"`
+	TimeoutCount       int            `json:"timeout_count"`
+	StatusClasses      map[string]int `json:"status_classes"`
+	FastestURL         string         `json:"fastest_url,omitempty"`
+	FastestResponseMS  int64          `json:"fastest_response_ms,omitempty"`
+	SlowestURL         string         `json:"slowest_url,omitempty"`
+	SlowestResponseMS  int64          `json:"slowest_response_ms,omitempty"`
+}
+
 type ErrorResponse struct {
 	Error   string `json:"error"`
 	Message string `json:"message"`
