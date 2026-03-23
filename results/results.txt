@@ -30,3 +30,6 @@ BenchmarkCheckURLsConcurrent-8                55          24267751 ns/op        
 PASS
 ok      healthcheck-api/internal/httpapi        3.899s
 PS C:\Users\Charlie\Documents\Coding\Golang\healthcheck-api> 
+
+==================================================================
+
