@@ -128,9 +128,3 @@ This is about a 4.3x speedup for the concurrent version.
 * Concurrency is currently one goroutine per URL rather than a worker pool
 * No authentication or rate limiting is implemented
 * No persistent configuration file or environment-based configuration yet
-
-````
-
-
-
-
